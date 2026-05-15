@@ -309,13 +309,13 @@ def render_ingestion_tab(settings: Dict[str, object]) -> None:
     st.subheader("1. Source Ingestion")
 
     st.write(
-        "Upload Markdown, TXT, or JSON or CSV files. For the sample support-agent demo, "
+        "Upload Markdown, TXT, or JSON or CSV or pdf files. For the sample support-agent demo, "
         "you can also load the built-in sample docs."
     )
 
     uploaded_files = st.file_uploader(
         "Upload source documents",
-        type=["md", "txt", "json", "csv"],
+        type=["md", "txt", "json", "csv", "pdf"],
         accept_multiple_files=True,
     )
 

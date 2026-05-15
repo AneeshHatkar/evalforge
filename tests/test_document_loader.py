@@ -1,4 +1,5 @@
 from pathlib import Path
+from pypdf import PdfWriter
 
 import pytest
 
@@ -17,6 +18,9 @@ def test_detect_source_type():
     assert detect_source_type("schema.json") == SourceType.JSON
     assert detect_source_type("data.csv") == SourceType.CSV
     assert detect_source_type("unknown.docx") == SourceType.UNKNOWN
+
+def test_detect_source_type_pdf():
+    assert detect_source_type("policy.pdf") == SourceType.PDF
 
 
 def test_make_source_id():

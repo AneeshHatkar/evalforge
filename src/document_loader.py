@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+from importlib.resources import path
 import json
 import re
 import pandas as pd
 from pathlib import Path
 from typing import Iterable, List, Union
+from pypdf import PdfReader
 
 from src.schemas import Document, SourceType
 
 
-SUPPORTED_EXTENSIONS = {".md", ".txt", ".json", ".csv"}
+SUPPORTED_EXTENSIONS = {".md", ".txt", ".json", ".csv", ".pdf"}
 
 
 def detect_source_type(filename: str) -> SourceType:
@@ -131,6 +133,31 @@ def read_csv_file(path: Path) -> str:
 
     return "\n".join(lines).strip()
 
+def read_pdf_file(path: Path) -> str:
+    """
+    Read a PDF file and extract text page by page.
+
+    Stage 1 PDF support is text extraction only.
+    Scanned/image-only PDFs may require OCR later.
+    """
+
+    reader = PdfReader(str(path))
+    pages = []
+
+    for page_index, page in enumerate(reader.pages, start=1):
+        page_text = page.extract_text() or ""
+
+        if page_text.strip():
+            pages.append(f"# Page {page_index}\n\n{page_text.strip()}")
+
+    if not pages:
+        raise ValueError(
+            f"No extractable text found in PDF: {path}. "
+            "This may be a scanned/image-only PDF."
+        )
+
+    return "\n\n".join(pages)
+
 
 def load_document(path: Union[str, Path]) -> Document:
     """
@@ -161,6 +188,8 @@ def load_document(path: Union[str, Path]) -> Document:
         text = read_json_file(path)
     elif source_type == SourceType.CSV:
         text = read_csv_file(path)
+    elif source_type == SourceType.PDF:
+        text = read_pdf_file(path)
     else:
         raise ValueError(f"Unsupported source type: {source_type}")
 
