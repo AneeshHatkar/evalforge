@@ -45,3 +45,17 @@ class EvalRunRequest(BaseModel):
 class EvalRunResponse(BaseModel):
     summary: Dict[str, object]
     result_count: int
+
+class PipelineRunResponse(BaseModel):
+    project_id: str
+    dataset_version: str
+
+    document_count: int
+    chunk_count: int
+    rule_count: int
+    case_count: int
+
+    quality_summary: Dict[str, object]
+
+    eval_summary: Optional[Dict[str, object]] = None
+    message: str = "Pipeline completed successfully."

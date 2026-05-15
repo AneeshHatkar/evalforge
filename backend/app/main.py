@@ -3,7 +3,16 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from backend.app.config import settings
-from backend.app.routers import cases, corpora, eval_runs, exports, generation, health, projects
+from backend.app.routers import (
+    cases,
+    corpora,
+    eval_runs,
+    exports,
+    generation,
+    health,
+    pipeline,
+    projects,
+)
 
 app = FastAPI(
     title=settings.app_name,
@@ -21,6 +30,7 @@ app.include_router(generation.router)
 app.include_router(cases.router)
 app.include_router(exports.router)
 app.include_router(eval_runs.router)
+app.include_router(pipeline.router)
 
 
 @app.get("/")
