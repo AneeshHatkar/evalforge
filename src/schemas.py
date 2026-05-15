@@ -38,6 +38,14 @@ class ReviewStatus(str, Enum):
     REJECTED = "rejected"
     NEEDS_FIX = "needs_fix"
 
+class RuleType(str, Enum):
+    ELIGIBILITY = "eligibility"
+    REQUIREMENT = "requirement"
+    PROHIBITION = "prohibition"
+    ESCALATION = "escalation"
+    TOOL_ACTION = "tool_action"
+    DEFINITION = "definition"
+    GENERAL_POLICY = "general_policy"
 
 class Document(BaseModel):
     """
@@ -107,6 +115,37 @@ class Chunk(BaseModel):
             if self.end_char < self.start_char:
                 raise ValueError("end_char must be greater than or equal to start_char.")
         return self
+
+class KnowledgeRule(BaseModel):
+    """
+    A structured rule, fact, procedure, or constraint extracted from a source chunk.
+
+    Stage 1 uses deterministic extraction.
+    Later versions can use LLM structured extraction.
+    """
+
+    rule_id: str = Field(..., description="Stable rule ID.")
+    source_chunk_id: str = Field(..., description="Chunk where the rule came from.")
+    source: str = Field(..., description="Original source filename.")
+    section: Optional[str] = Field(default=None, description="Source section title.")
+
+    rule_type: RuleType = Field(default=RuleType.GENERAL_POLICY)
+    rule_text: str = Field(..., description="Original or lightly cleaned rule sentence.")
+    condition: Optional[str] = Field(default=None)
+    expected_action: Optional[str] = Field(default=None)
+
+    required_evidence: List[str] = Field(default_factory=list)
+    risk_level: RiskLevel = RiskLevel.LOW
+    confidence: float = Field(default=0.75, ge=0.0, le=1.0)
+
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("rule_id", "source_chunk_id", "source", "rule_text")
+    @classmethod
+    def rule_required_fields(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("Rule fields cannot be empty.")
+        return value.strip()
 
 
 class Citation(BaseModel):
