@@ -1,0 +1,33 @@
+{
+  "tools": [
+    {
+      "name": "issue_shipping_refund",
+      "description": "Issues a shipping-fee-only refund for eligible late deliveries.",
+      "required_arguments": [
+        "order_id",
+        "refund_type",
+        "eligibility_reason"
+      ],
+      "allowed_refund_types": [
+        "shipping_fee_only"
+      ]
+    },
+    {
+      "name": "create_replacement_order",
+      "description": "Creates a replacement order for damaged products after required evidence is provided.",
+      "required_arguments": [
+        "order_id",
+        "damage_evidence",
+        "replacement_reason"
+      ]
+    },
+    {
+      "name": "escalate_to_human",
+      "description": "Escalates complex, unsafe, suspicious, repeated, or unclear cases to a human support specialist.",
+      "required_arguments": [
+        "order_id",
+        "escalation_reason"
+      ]
+    }
+  ]
+}
