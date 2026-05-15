@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import pandas as pd
 from pathlib import Path
 from typing import Iterable, List, Union
 
 from src.schemas import Document, SourceType
 
 
-SUPPORTED_EXTENSIONS = {".md", ".txt", ".json"}
+SUPPORTED_EXTENSIONS = {".md", ".txt", ".json", ".csv"}
 
 
 def detect_source_type(filename: str) -> SourceType:
@@ -25,6 +26,8 @@ def detect_source_type(filename: str) -> SourceType:
         return SourceType.TEXT
     if suffix == ".json":
         return SourceType.JSON
+    if suffix == ".csv":
+        return SourceType.CSV
     if suffix == ".pdf":
         return SourceType.PDF
 
@@ -93,6 +96,41 @@ def read_json_file(path: Path) -> str:
 
     return json.dumps(data, indent=2, ensure_ascii=False)
 
+def read_csv_file(path: Path) -> str:
+    """
+    Read CSV files and convert rows into readable text.
+
+    This lets EvalForge test simple online datasets before we build
+    a database-backed ingestion pipeline.
+    """
+
+    dataframe = pd.read_csv(path)
+
+    if dataframe.empty:
+        raise ValueError(f"CSV file is empty: {path}")
+
+    lines = []
+
+    lines.append(f"# CSV Source: {path.name}")
+    lines.append("")
+    lines.append(f"Columns: {', '.join(dataframe.columns.astype(str))}")
+    lines.append("")
+
+    for index, row in dataframe.iterrows():
+        lines.append(f"## Row {index + 1}")
+
+        for column in dataframe.columns:
+            value = row[column]
+
+            if pd.isna(value):
+                continue
+
+            lines.append(f"{column}: {value}")
+
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
 
 def load_document(path: Union[str, Path]) -> Document:
     """
@@ -121,6 +159,8 @@ def load_document(path: Union[str, Path]) -> Document:
         text = read_text_file(path)
     elif source_type == SourceType.JSON:
         text = read_json_file(path)
+    elif source_type == SourceType.CSV:
+        text = read_csv_file(path)
     else:
         raise ValueError(f"Unsupported source type: {source_type}")
 

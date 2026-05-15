@@ -11,6 +11,7 @@ class SourceType(str, Enum):
     MARKDOWN = "markdown"
     TEXT = "text"
     JSON = "json"
+    CSV = "csv"
     PDF = "pdf"
     UNKNOWN = "unknown"
 

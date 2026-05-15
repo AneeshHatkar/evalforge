@@ -15,6 +15,7 @@ def test_detect_source_type():
     assert detect_source_type("policy.md") == SourceType.MARKDOWN
     assert detect_source_type("notes.txt") == SourceType.TEXT
     assert detect_source_type("schema.json") == SourceType.JSON
+    assert detect_source_type("data.csv") == SourceType.CSV
     assert detect_source_type("unknown.docx") == SourceType.UNKNOWN
 
 
@@ -46,6 +47,22 @@ def test_load_json_document(tmp_path: Path):
     assert document.source_id == "tool_schema"
     assert document.source_type == SourceType.JSON
     assert '"tool": "issue_refund"' in document.text
+
+def test_load_csv_document(tmp_path: Path):
+    sample_file = tmp_path / "support_rules.csv"
+    sample_file.write_text(
+        "policy_area,condition,allowed_action\n"
+        "refund,delivery delayed more than 7 days,issue shipping-fee refund\n",
+        encoding="utf-8",
+    )
+
+    document = load_document(sample_file)
+
+    assert document.source_id == "support_rules"
+    assert document.source_type == SourceType.CSV
+    assert "CSV Source" in document.text
+    assert "delivery delayed more than 7 days" in document.text
+    assert "issue shipping-fee refund" in document.text
 
 
 def test_unsupported_file_type_raises_error(tmp_path: Path):

@@ -1,0 +1,6 @@
+policy_area,condition,allowed_action,required_evidence,risk_level
+refund,delivery delayed more than 7 days,issue shipping-fee refund,order_id and compensation_status,medium
+refund,customer already received compensation,do not issue duplicate refund,order_id and compensation_status,high
+warranty,manufacturing defect within one year,start warranty claim,order_id purchase_date serial_number,medium
+warranty,accidental damage,deny warranty coverage,damage_description,medium
+shipping,tracking no movement for more than 10 days,escalate to human review,tracking_status and order_id,high

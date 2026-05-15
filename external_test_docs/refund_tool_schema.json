@@ -1,0 +1,21 @@
+{
+  "tools": [
+    {
+      "name": "issue_shipping_refund",
+      "description": "Issues a shipping-fee-only refund when the seller caused the return or the policy allows it.",
+      "required_arguments": [
+        "order_id",
+        "refund_type",
+        "eligibility_reason"
+      ]
+    },
+    {
+      "name": "escalate_to_human",
+      "description": "Escalates suspicious, repeated, or unclear refund requests to a human reviewer.",
+      "required_arguments": [
+        "order_id",
+        "escalation_reason"
+      ]
+    }
+  ]
+}

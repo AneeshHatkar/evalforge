@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import json
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -21,6 +22,12 @@ from src.validator import (
     summarize_validation_results,
     validate_cases,
 )
+from src.eval_runner import (
+    demo_target_system,
+    eval_results_to_dicts,
+    intentionally_bad_target_system,
+    run_eval_dataset,
+)
 
 
 st.set_page_config(
@@ -36,15 +43,17 @@ def initialize_session_state() -> None:
     """
 
     defaults = {
-        "documents": [],
-        "chunks": [],
-        "rules": [],
-        "cases": [],
-        "validation_results": {},
-        "quality_summary": {},
-        "export_paths": {},
-        "tool_schema_text": "",
-    }
+    "documents": [],
+    "chunks": [],
+    "rules": [],
+    "cases": [],
+    "validation_results": {},
+    "quality_summary": {},
+    "export_paths": {},
+    "tool_schema_text": "",
+    "eval_results": [],
+    "eval_summary": None,
+}
 
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -202,6 +211,35 @@ def cases_to_dataframe(cases: List[EvalCase]) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+def eval_results_to_dataframe(eval_results) -> pd.DataFrame:
+    """
+    Convert eval results to a display table for Streamlit.
+    """
+
+    rows = []
+
+    for result in eval_results:
+        rows.append(
+            {
+                "test_id": result.test_id,
+                "test_type": result.test_type.value,
+                "passed": result.passed,
+                "overall_score": result.grade.overall_score,
+                "faithfulness": result.grade.faithfulness,
+                "answer_relevance": result.grade.answer_relevance,
+                "citation_accuracy": result.grade.citation_accuracy,
+                "policy_correctness": result.grade.policy_correctness,
+                "refusal_correctness": result.grade.refusal_correctness,
+                "clarification_correctness": result.grade.clarification_correctness,
+                "tool_call_correctness": result.grade.tool_call_correctness,
+                "safety": result.grade.safety,
+                "latency_ms": result.target_response.latency_ms,
+                "answer_preview": result.target_response.answer[:180],
+            }
+        )
+
+    return pd.DataFrame(rows)
+
 
 def render_header() -> None:
     st.title("🧪 EvalForge")
@@ -271,13 +309,13 @@ def render_ingestion_tab(settings: Dict[str, object]) -> None:
     st.subheader("1. Source Ingestion")
 
     st.write(
-        "Upload Markdown, TXT, or JSON files. For the sample support-agent demo, "
+        "Upload Markdown, TXT, or JSON or CSV files. For the sample support-agent demo, "
         "you can also load the built-in sample docs."
     )
 
     uploaded_files = st.file_uploader(
         "Upload source documents",
-        type=["md", "txt", "json"],
+        type=["md", "txt", "json", "csv"],
         accept_multiple_files=True,
     )
 
@@ -641,6 +679,139 @@ def render_export_tab() -> None:
                     use_container_width=True,
                 )
 
+def render_eval_runner_tab() -> None:
+    st.subheader("7. Evaluation Runner")
+
+    if not st.session_state.cases:
+        st.info("Generate cases first.")
+        return
+
+    st.write(
+        "Run the generated benchmark against a demo target system. "
+        "The good demo target follows the case structure, while the bad demo target ignores policies and citations."
+    )
+
+    col_a, col_b, col_c = st.columns(3)
+
+    with col_a:
+        target_choice = st.selectbox(
+            "Target system",
+            options=[
+                "demo_target_system",
+                "intentionally_bad_target_system",
+            ],
+        )
+
+    with col_b:
+        pass_threshold = st.slider(
+            "Pass threshold",
+            min_value=0.10,
+            max_value=0.95,
+            value=0.70,
+            step=0.05,
+        )
+
+    with col_c:
+        eval_approved_only = st.checkbox(
+            "Evaluate approved cases only",
+            value=False,
+        )
+
+    eval_cases = st.session_state.cases
+
+    if eval_approved_only:
+        eval_cases = [
+            case for case in eval_cases if case.review_status == ReviewStatus.APPROVED
+        ]
+
+    st.write(f"Cases selected for evaluation: **{len(eval_cases)}**")
+
+    if not eval_cases:
+        st.warning("No cases match the selected evaluation filter.")
+        return
+
+    if st.button("Run Evaluation", type="primary", use_container_width=True):
+        if target_choice == "demo_target_system":
+            target_fn = demo_target_system
+        else:
+            target_fn = intentionally_bad_target_system
+
+        results, summary = run_eval_dataset(
+            cases=eval_cases,
+            target_system=target_fn,
+            target_system_name=target_choice,
+            dataset_version=str(eval_cases[0].dataset_version if eval_cases else "v0.1.0"),
+            pass_threshold=float(pass_threshold),
+        )
+
+        st.session_state.eval_results = results
+        st.session_state.eval_summary = summary
+
+        st.success(f"Evaluation complete. Ran {summary.total_cases} case(s).")
+
+    if st.session_state.eval_summary is not None:
+        summary = st.session_state.eval_summary
+
+        st.markdown("### Evaluation Summary")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("Total Cases", summary.total_cases)
+        col2.metric("Passed", summary.passed_cases)
+        col3.metric("Pass Rate", summary.pass_rate)
+        col4.metric("Average Score", summary.average_score)
+
+        st.markdown("### Score by Test Type")
+
+        if summary.score_by_test_type:
+            st.bar_chart(pd.Series(summary.score_by_test_type))
+        else:
+            st.info("No test-type score breakdown available.")
+
+        st.markdown("### Evaluation Results")
+
+        if st.session_state.eval_results:
+            df = eval_results_to_dataframe(st.session_state.eval_results)
+            st.dataframe(df, use_container_width=True)
+
+            with st.expander("Inspect detailed responses"):
+                for result in st.session_state.eval_results:
+                    st.markdown(f"#### {result.test_id}")
+                    st.caption(
+                        f"{result.test_type.value} · passed={result.passed} · score={result.grade.overall_score}"
+                    )
+
+                    st.markdown("**User query**")
+                    st.write(result.user_query)
+
+                    st.markdown("**Target answer**")
+                    st.write(result.target_response.answer)
+
+                    st.markdown("**Citations returned**")
+                    st.write(result.target_response.citations)
+
+                    if result.target_response.tool_calls:
+                        st.markdown("**Tool calls**")
+                        st.json(result.target_response.tool_calls)
+
+                    st.markdown("**Grade**")
+                    st.json(result.grade.model_dump(mode="json"))
+
+        st.markdown("### Download Evaluation Results")
+
+        eval_payload = {
+            "summary": summary.model_dump(mode="json"),
+            "results": eval_results_to_dicts(st.session_state.eval_results),
+        }
+
+        st.download_button(
+            label="Download eval_run_results.json",
+            data=json.dumps(eval_payload, indent=2).encode("utf-8"),
+            file_name="eval_run_results.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
 
 def main() -> None:
     initialize_session_state()
@@ -649,15 +820,16 @@ def main() -> None:
     settings = render_sidebar()
 
     tabs = st.tabs(
-        [
-            "1. Ingest",
-            "2. Process",
-            "3. Generate",
-            "4. Validate",
-            "5. Review",
-            "6. Export",
-        ]
-    )
+    [
+        "1. Ingest",
+        "2. Process",
+        "3. Generate",
+        "4. Validate",
+        "5. Review",
+        "6. Export",
+        "7. Eval Runner",
+    ]
+)
 
     with tabs[0]:
         render_ingestion_tab(settings)
@@ -676,6 +848,9 @@ def main() -> None:
 
     with tabs[5]:
         render_export_tab()
+    
+    with tabs[6]:
+        render_eval_runner_tab()
 
 
 if __name__ == "__main__":
