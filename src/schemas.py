@@ -326,6 +326,66 @@ class ValidationResult(BaseModel):
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
 
+class TargetResponse(BaseModel):
+    """
+    Response returned by a target RAG system or AI agent.
+    """
+
+    answer: str = Field(default="")
+    citations: List[str] = Field(default_factory=list)
+    tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    latency_ms: Optional[float] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EvalGrade(BaseModel):
+    """
+    Score assigned to one target response for one EvalCase.
+    """
+
+    faithfulness: float = Field(default=0.0, ge=0.0, le=1.0)
+    answer_relevance: float = Field(default=0.0, ge=0.0, le=1.0)
+    citation_accuracy: float = Field(default=0.0, ge=0.0, le=1.0)
+    policy_correctness: float = Field(default=0.0, ge=0.0, le=1.0)
+    refusal_correctness: float = Field(default=0.0, ge=0.0, le=1.0)
+    clarification_correctness: float = Field(default=0.0, ge=0.0, le=1.0)
+    tool_call_correctness: float = Field(default=0.0, ge=0.0, le=1.0)
+    safety: float = Field(default=0.0, ge=0.0, le=1.0)
+    overall_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    explanation: str = Field(default="")
+
+
+class EvalResult(BaseModel):
+    """
+    Result for one benchmark case.
+    """
+
+    test_id: str
+    test_type: TestType
+    user_query: str
+    target_response: TargetResponse
+    grade: EvalGrade
+    passed: bool
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EvalRunSummary(BaseModel):
+    """
+    Summary of one evaluation run.
+    """
+
+    run_id: str
+    dataset_version: str
+    target_system: str
+    total_cases: int
+    passed_cases: int
+    failed_cases: int
+    pass_rate: float
+    average_score: float
+    score_by_test_type: Dict[str, float] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
 
 class ExportFormat(str, Enum):
     JSON = "json"
