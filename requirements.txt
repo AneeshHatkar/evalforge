@@ -1,7 +1,10 @@
 streamlit
-pydantic>=2.0
+pydantic>=2
 pandas
 python-dotenv
 pytest
 rapidfuzz
 pypdf
+fastapi
+uvicorn
+python-multipart
