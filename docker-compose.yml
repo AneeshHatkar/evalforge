@@ -1,0 +1,32 @@
+services:
+  evalforge-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: evalforge-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./sample_docs:/app/sample_docs
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped
+
+  evalforge-streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: evalforge-streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./sample_docs:/app/sample_docs
+    environment:
+      - PYTHONPATH=/app
+    depends_on:
+      - evalforge-api
+    restart: unless-stopped
