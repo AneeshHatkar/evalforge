@@ -59,3 +59,22 @@ class PipelineRunResponse(BaseModel):
 
     eval_summary: Optional[Dict[str, object]] = None
     message: str = "Pipeline completed successfully."
+
+class HttpTargetConfig(BaseModel):
+    target_url: str = Field(..., description="URL of the target RAG/agent API.")
+    method: str = Field(default="POST", description="HTTP method. Stage 2 supports POST.")
+    request_field: str = Field(default="question")
+    response_answer_field: str = Field(default="answer")
+    response_citations_field: Optional[str] = Field(default="citations")
+    response_tool_calls_field: Optional[str] = Field(default="tool_calls")
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
+
+
+class HttpTargetEvalRunRequest(BaseModel):
+    target: HttpTargetConfig
+    pass_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+
+
+class HttpTargetEvalRunResponse(BaseModel):
+    summary: Dict[str, object]
+    result_count: int
