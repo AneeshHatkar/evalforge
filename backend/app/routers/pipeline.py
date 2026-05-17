@@ -346,6 +346,8 @@ def get_run_cases(
     }
 
 from backend.app.db.repositories import (
+    compare_pipeline_runs,
+    create_pipeline_run,
     get_cases_for_run,
     get_pipeline_run,
     list_pipeline_runs,
@@ -396,3 +398,36 @@ def get_run_cases(
         "case_count": len(cases),
         "cases": cases,
     }
+
+@router.get("/runs/{run_id}/compare/{baseline_run_id}")
+def compare_runs(
+    run_id: str,
+    baseline_run_id: str,
+    regression_threshold: float = -0.02,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Compare two persisted pipeline runs.
+
+    Use this to detect whether a newer run improved or regressed compared
+    with a baseline run.
+    """
+
+    current_run = get_pipeline_run(db=db, run_id=run_id)
+
+    if current_run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    baseline_run = get_pipeline_run(db=db, run_id=baseline_run_id)
+
+    if baseline_run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Baseline pipeline run not found: {baseline_run_id}",
+        )
+
+    return compare_pipeline_runs(
+        current_run=current_run,
+        baseline_run=baseline_run,
+        regression_threshold=regression_threshold,
+    )

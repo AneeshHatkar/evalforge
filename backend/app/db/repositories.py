@@ -209,3 +209,176 @@ def get_cases_for_run(db: Session, run_id: str) -> List[dict]:
     )
 
     return [json.loads(row.payload_json) for row in rows]
+
+def safe_float(value, default: float = 0.0) -> float:
+    """
+    Convert a value into float safely.
+    """
+
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def compare_numeric_metric(
+    current_summary: dict,
+    baseline_summary: dict,
+    metric_name: str,
+) -> dict:
+    """
+    Compare one numeric metric between two summaries.
+    """
+
+    current_value = safe_float(current_summary.get(metric_name))
+    baseline_value = safe_float(baseline_summary.get(metric_name))
+    delta = round(current_value - baseline_value, 4)
+
+    return {
+        "current": current_value,
+        "baseline": baseline_value,
+        "delta": delta,
+    }
+
+
+def compare_nested_scores(
+    current_scores: dict,
+    baseline_scores: dict,
+) -> dict:
+    """
+    Compare nested score dictionaries, such as score_by_test_type.
+    """
+
+    all_keys = sorted(set(current_scores.keys()) | set(baseline_scores.keys()))
+    comparison = {}
+
+    for key in all_keys:
+        current_value = safe_float(current_scores.get(key))
+        baseline_value = safe_float(baseline_scores.get(key))
+        comparison[key] = {
+            "current": current_value,
+            "baseline": baseline_value,
+            "delta": round(current_value - baseline_value, 4),
+        }
+
+    return comparison
+
+
+def compare_pipeline_runs(
+    current_run: PipelineRunRecord,
+    baseline_run: PipelineRunRecord,
+    regression_threshold: float = -0.02,
+) -> dict:
+    """
+    Compare two persisted pipeline runs.
+
+    current_run is the run being evaluated.
+    baseline_run is the previous/reference run.
+    """
+
+    current_quality = loads(current_run.quality_summary_json) or {}
+    baseline_quality = loads(baseline_run.quality_summary_json) or {}
+
+    current_eval = loads(current_run.eval_summary_json) or {}
+    baseline_eval = loads(baseline_run.eval_summary_json) or {}
+
+    metric_comparison = {
+        "document_count": {
+            "current": current_run.document_count,
+            "baseline": baseline_run.document_count,
+            "delta": current_run.document_count - baseline_run.document_count,
+        },
+        "chunk_count": {
+            "current": current_run.chunk_count,
+            "baseline": baseline_run.chunk_count,
+            "delta": current_run.chunk_count - baseline_run.chunk_count,
+        },
+        "rule_count": {
+            "current": current_run.rule_count,
+            "baseline": baseline_run.rule_count,
+            "delta": current_run.rule_count - baseline_run.rule_count,
+        },
+        "case_count": {
+            "current": current_run.case_count,
+            "baseline": baseline_run.case_count,
+            "delta": current_run.case_count - baseline_run.case_count,
+        },
+        "validity_rate": compare_numeric_metric(
+            current_quality,
+            baseline_quality,
+            "validity_rate",
+        ),
+        "citation_coverage": compare_numeric_metric(
+            current_quality,
+            baseline_quality,
+            "citation_coverage",
+        ),
+        "total_errors": compare_numeric_metric(
+            current_quality,
+            baseline_quality,
+            "total_errors",
+        ),
+        "total_warnings": compare_numeric_metric(
+            current_quality,
+            baseline_quality,
+            "total_warnings",
+        ),
+        "average_score": compare_numeric_metric(
+            current_eval,
+            baseline_eval,
+            "average_score",
+        ),
+        "pass_rate": compare_numeric_metric(
+            current_eval,
+            baseline_eval,
+            "pass_rate",
+        ),
+    }
+
+    current_type_scores = current_eval.get("score_by_test_type", {}) or {}
+    baseline_type_scores = baseline_eval.get("score_by_test_type", {}) or {}
+
+    score_by_test_type_comparison = compare_nested_scores(
+        current_type_scores,
+        baseline_type_scores,
+    )
+
+    regression_reasons = []
+
+    for metric_name in ["validity_rate", "citation_coverage", "average_score", "pass_rate"]:
+        delta = metric_comparison[metric_name]["delta"]
+
+        if delta < regression_threshold:
+            regression_reasons.append(
+                f"{metric_name} decreased by {delta}"
+            )
+
+    for test_type, comparison in score_by_test_type_comparison.items():
+        delta = comparison["delta"]
+
+        if delta < regression_threshold:
+            regression_reasons.append(
+                f"{test_type} score decreased by {delta}"
+            )
+
+    # More errors is also a regression.
+    if metric_comparison["total_errors"]["delta"] > 0:
+        regression_reasons.append(
+            f"total_errors increased by {metric_comparison['total_errors']['delta']}"
+        )
+
+    return {
+        "current_run_id": current_run.run_id,
+        "baseline_run_id": baseline_run.run_id,
+        "current_project_id": current_run.project_id,
+        "baseline_project_id": baseline_run.project_id,
+        "current_dataset_version": current_run.dataset_version,
+        "baseline_dataset_version": baseline_run.dataset_version,
+        "metric_comparison": metric_comparison,
+        "score_by_test_type_comparison": score_by_test_type_comparison,
+        "regression_threshold": regression_threshold,
+        "regression_detected": len(regression_reasons) > 0,
+        "regression_reasons": regression_reasons,
+    }
