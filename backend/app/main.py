@@ -7,6 +7,7 @@ from backend.app.config import settings
 from backend.app.routers import (
     cases,
     corpora,
+    dashboard,
     eval_runs,
     exports,
     generation,
@@ -35,6 +36,7 @@ app.include_router(cases.router)
 app.include_router(exports.router)
 app.include_router(eval_runs.router)
 app.include_router(pipeline.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/")
