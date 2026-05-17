@@ -382,3 +382,28 @@ def compare_pipeline_runs(
         "regression_detected": len(regression_reasons) > 0,
         "regression_reasons": regression_reasons,
     }
+
+def get_quality_summary_for_run(db: Session, run_id: str) -> Optional[dict]:
+    """
+    Return persisted quality summary for one pipeline run.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        return None
+
+    return loads(run.quality_summary_json)
+
+
+def get_eval_summary_for_run(db: Session, run_id: str) -> Optional[dict]:
+    """
+    Return persisted eval summary for one pipeline run, if available.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        return None
+
+    return loads(run.eval_summary_json)

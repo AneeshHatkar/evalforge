@@ -1,10 +1,12 @@
 import tempfile
+import csv
+import io
+import json
+from fastapi.responses import Response
 from pathlib import Path
 from typing import Annotated, List, Optional
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
-
 from backend.app.api_schemas import PipelineRunResponse
 from backend.app.db.repositories import (
     create_pipeline_run,
@@ -283,6 +285,92 @@ async def run_pipeline(
         ),
     )
 
+def get_cases_or_404(run_id: str, db: Session) -> list[dict]:
+    """
+    Get persisted cases for a run or raise 404.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    return get_cases_for_run(db=db, run_id=run_id)
+
+
+def flatten_case_for_persisted_csv(case: dict) -> dict:
+    """
+    Flatten one persisted case dictionary into a CSV-friendly row.
+    """
+
+    return {
+        "test_id": case.get("test_id", ""),
+        "project_id": case.get("project_id", ""),
+        "dataset_version": case.get("dataset_version", ""),
+        "test_type": case.get("test_type", ""),
+        "risk_level": case.get("risk_level", ""),
+        "review_status": case.get("review_status", ""),
+        "user_query": case.get("user_query", ""),
+        "expected_behavior": case.get("expected_behavior", ""),
+        "expected_answer_outline": json.dumps(
+            case.get("expected_answer_outline", []),
+            ensure_ascii=False,
+        ),
+        "required_citations": json.dumps(
+            case.get("required_citations", []),
+            ensure_ascii=False,
+        ),
+        "disallowed_behaviors": json.dumps(
+            case.get("disallowed_behaviors", []),
+            ensure_ascii=False,
+        ),
+        "tags": json.dumps(case.get("tags", []), ensure_ascii=False),
+        "tool_expectation": json.dumps(
+            case.get("tool_expectation"),
+            ensure_ascii=False,
+        ),
+        "validation_errors": json.dumps(
+            case.get("validation_errors", []),
+            ensure_ascii=False,
+        ),
+        "metadata": json.dumps(case.get("metadata", {}), ensure_ascii=False),
+        "created_at": case.get("created_at", ""),
+    }
+
+
+def persisted_cases_to_csv_text(cases: list[dict]) -> str:
+    """
+    Convert persisted cases into CSV text.
+    """
+
+    output = io.StringIO()
+
+    fieldnames = [
+        "test_id",
+        "project_id",
+        "dataset_version",
+        "test_type",
+        "risk_level",
+        "review_status",
+        "user_query",
+        "expected_behavior",
+        "expected_answer_outline",
+        "required_citations",
+        "disallowed_behaviors",
+        "tags",
+        "tool_expectation",
+        "validation_errors",
+        "metadata",
+        "created_at",
+    ]
+
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+
+    for case in cases:
+        writer.writerow(flatten_case_for_persisted_csv(case))
+
+    return output.getvalue()
 
 @router.get("/runs")
 def list_runs(
@@ -349,7 +437,9 @@ from backend.app.db.repositories import (
     compare_pipeline_runs,
     create_pipeline_run,
     get_cases_for_run,
+    get_eval_summary_for_run,
     get_pipeline_run,
+    get_quality_summary_for_run,
     list_pipeline_runs,
     pipeline_run_to_dict,
 )
@@ -431,3 +521,111 @@ def compare_runs(
         baseline_run=baseline_run,
         regression_threshold=regression_threshold,
     )
+
+@router.get("/runs/{run_id}/export/json")
+def export_run_json(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Export persisted benchmark cases for a pipeline run as JSON.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    cases = get_cases_for_run(db=db, run_id=run_id)
+
+    return {
+        "metadata": pipeline_run_to_dict(run),
+        "cases": cases,
+    }
+
+
+@router.get("/runs/{run_id}/export/jsonl")
+def export_run_jsonl(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """
+    Export persisted benchmark cases for a pipeline run as JSONL.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    cases = get_cases_for_run(db=db, run_id=run_id)
+
+    jsonl_text = "\n".join(
+        json.dumps(case, ensure_ascii=False)
+        for case in cases
+    )
+
+    if jsonl_text:
+        jsonl_text += "\n"
+
+    filename = f"{run_id}.jsonl"
+
+    return Response(
+        content=jsonl_text,
+        media_type="application/x-ndjson",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@router.get("/runs/{run_id}/export/csv")
+def export_run_csv(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """
+    Export persisted benchmark cases for a pipeline run as CSV.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    cases = get_cases_for_run(db=db, run_id=run_id)
+
+    csv_text = persisted_cases_to_csv_text(cases)
+    filename = f"{run_id}.csv"
+
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@router.get("/runs/{run_id}/quality-report")
+def export_run_quality_report(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Return persisted quality and eval summaries for one pipeline run.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    quality_summary = get_quality_summary_for_run(db=db, run_id=run_id)
+    eval_summary = get_eval_summary_for_run(db=db, run_id=run_id)
+
+    return {
+        "run": pipeline_run_to_dict(run),
+        "quality_summary": quality_summary,
+        "eval_summary": eval_summary,
+    }
