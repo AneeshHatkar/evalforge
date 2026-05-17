@@ -98,12 +98,17 @@ def read_json_file(path: Path) -> str:
 
     return json.dumps(data, indent=2, ensure_ascii=False)
 
-def read_csv_file(path: Path) -> str:
+def read_csv_file(path: Path, max_rows: int = 500) -> str:
     """
     Read CSV files and convert rows into readable text.
 
-    This lets EvalForge test simple online datasets before we build
-    a database-backed ingestion pipeline.
+    EvalForge limits CSV ingestion by default because real online datasets can
+    contain tens of thousands of rows. Without a row limit, one CSV can dominate
+    chunking, rule extraction, generation, and the demo output.
+
+    The goal is not to train on the full CSV here. The goal is to sample enough
+    realistic rows for benchmark generation while keeping the pipeline fast and
+    reviewable.
     """
 
     dataframe = pd.read_csv(path)
@@ -111,11 +116,18 @@ def read_csv_file(path: Path) -> str:
     if dataframe.empty:
         raise ValueError(f"CSV file is empty: {path}")
 
+    original_row_count = len(dataframe)
+
+    if max_rows > 0:
+        dataframe = dataframe.head(max_rows)
+
     lines = []
 
     lines.append(f"# CSV Source: {path.name}")
     lines.append("")
     lines.append(f"Columns: {', '.join(dataframe.columns.astype(str))}")
+    lines.append(f"Original row count: {original_row_count}")
+    lines.append(f"Rows ingested: {len(dataframe)}")
     lines.append("")
 
     for index, row in dataframe.iterrows():
@@ -127,7 +139,12 @@ def read_csv_file(path: Path) -> str:
             if pd.isna(value):
                 continue
 
-            lines.append(f"{column}: {value}")
+            value_text = str(value).strip()
+
+            if not value_text:
+                continue
+
+            lines.append(f"{column}: {value_text}")
 
         lines.append("")
 

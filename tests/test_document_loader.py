@@ -68,6 +68,29 @@ def test_load_csv_document(tmp_path: Path):
     assert "delivery delayed more than 7 days" in document.text
     assert "issue shipping-fee refund" in document.text
 
+def test_load_csv_document_limits_rows_by_default(tmp_path: Path):
+    sample_file = tmp_path / "large_support_rules.csv"
+
+    rows = ["policy_area,condition,allowed_action"]
+    for index in range(600):
+        rows.append(
+            f"refund,condition {index},allowed action {index}"
+        )
+
+    sample_file.write_text(
+        "\n".join(rows),
+        encoding="utf-8",
+    )
+
+    document = load_document(sample_file)
+
+    assert document.source_type == SourceType.CSV
+    assert "Original row count: 600" in document.text
+    assert "Rows ingested: 500" in document.text
+    assert "condition 0" in document.text
+    assert "condition 499" in document.text
+    assert "condition 500" not in document.text
+
 
 def test_unsupported_file_type_raises_error(tmp_path: Path):
     sample_file = tmp_path / "policy.docx"
