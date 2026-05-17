@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-
+from backend.app.db.session import init_db
 from backend.app.main import app
 from backend.app.state import store
 
@@ -10,6 +10,7 @@ client = TestClient(app)
 
 
 def setup_function():
+    init_db()
     store.projects = {}
     store.reset_pipeline()
 

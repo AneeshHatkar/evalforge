@@ -2,17 +2,17 @@ from fastapi.testclient import TestClient
 
 from backend.app.main import app
 from backend.app.state import store
+from backend.app.db.session import init_db
 
 
 client = TestClient(app)
 
-
 def setup_function():
     """
-    Reset backend in-memory store before each API test.
-
-    This keeps tests independent from each other.
+    Reset backend in-memory store and ensure SQLite tables exist before each API test.
     """
+
+    init_db()
     store.projects = {}
     store.reset_pipeline()
 
