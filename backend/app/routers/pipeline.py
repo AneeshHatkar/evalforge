@@ -2,9 +2,18 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.orm import Session
 
 from backend.app.api_schemas import PipelineRunResponse
+from backend.app.db.repositories import (
+    create_pipeline_run,
+    get_cases_for_run,
+    get_pipeline_run,
+    list_pipeline_runs,
+    pipeline_run_to_dict,
+)
+from backend.app.db.session import get_db
 from backend.app.state import store
 from src.chunker import chunk_documents
 from src.document_loader import load_documents
@@ -79,7 +88,9 @@ def detect_tool_schema_text_from_saved_files(saved_paths: List[Path]) -> str:
     for path in saved_paths:
         filename = path.name.lower()
 
-        if path.suffix.lower() == ".json" and ("tool" in filename or "schema" in filename):
+        if path.suffix.lower() == ".json" and (
+            "tool" in filename or "schema" in filename
+        ):
             return path.read_text(encoding="utf-8")
 
     return ""
@@ -142,7 +153,7 @@ def generate_cases_from_rules(
 async def run_pipeline(
     files: Annotated[
         List[UploadFile],
-        File(description="Upload one or more .md, .txt, .json, .csv, or .pdf files.")
+        File(description="Upload one or more .md, .txt, .json, .csv, or .pdf files."),
     ],
     project_id: Annotated[str, Form()] = "support_demo",
     dataset_version: Annotated[str, Form()] = "v0.1.0",
@@ -151,13 +162,14 @@ async def run_pipeline(
     run_eval: Annotated[bool, Form()] = False,
     target_system: Annotated[str, Form()] = "demo_target_system",
     pass_threshold: Annotated[float, Form()] = 0.70,
+    db: Session = Depends(get_db),
 ) -> PipelineRunResponse:
     """
     One-shot EvalForge pipeline.
 
-    User uploads RAG docs, policy files, tool schemas, or workflow files.
+    User uploads RAG docs, policy files, tool schemas, CSVs, or PDFs.
     EvalForge automatically loads, chunks, extracts rules, generates benchmark
-    cases, validates them, and optionally runs evaluation.
+    cases, validates them, optionally runs evaluation, and persists the run.
     """
 
     if not files:
@@ -242,9 +254,22 @@ async def run_pipeline(
         store.eval_summary = eval_summary_to_dict(eval_run_summary)
         eval_summary = store.eval_summary
 
+    pipeline_run_record = create_pipeline_run(
+        db=db,
+        project_id=project_id,
+        dataset_version=dataset_version,
+        documents=documents,
+        chunks=chunks,
+        rules=rules,
+        cases=cases_with_errors,
+        quality_summary=quality_summary,
+        eval_summary=eval_summary,
+    )
+
     return PipelineRunResponse(
         project_id=project_id,
         dataset_version=dataset_version,
+        pipeline_run_id=pipeline_run_record.run_id,
         document_count=len(documents),
         chunk_count=len(chunks),
         rule_count=len(rules),
@@ -254,6 +279,120 @@ async def run_pipeline(
         message=(
             "Pipeline completed successfully. Uploaded files were ingested, chunked, "
             "converted into rules, used to generate benchmark cases, validated, and "
-            "stored in backend memory."
+            "stored in backend memory and SQLite persistence."
         ),
     )
+
+
+@router.get("/runs")
+def list_runs(
+    project_id: Optional[str] = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    List persisted pipeline runs.
+
+    Optional:
+    - project_id: filter runs by project
+    - limit: maximum number of runs to return
+    """
+
+    runs = list_pipeline_runs(db=db, project_id=project_id, limit=limit)
+
+    return {
+        "run_count": len(runs),
+        "runs": [pipeline_run_to_dict(run) for run in runs],
+    }
+
+
+@router.get("/runs/{run_id}")
+def get_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Get metadata and summaries for one persisted pipeline run.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    return pipeline_run_to_dict(run)
+
+
+@router.get("/runs/{run_id}/cases")
+def get_run_cases(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Get generated cases for one persisted pipeline run.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    cases = get_cases_for_run(db=db, run_id=run_id)
+
+    return {
+        "run_id": run_id,
+        "case_count": len(cases),
+        "cases": cases,
+    }
+
+from backend.app.db.repositories import (
+    get_cases_for_run,
+    get_pipeline_run,
+    list_pipeline_runs,
+    pipeline_run_to_dict,
+)
+
+@router.get("/runs")
+def list_runs(
+    project_id: Optional[str] = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+) -> dict:
+    runs = list_pipeline_runs(db=db, project_id=project_id, limit=limit)
+
+    return {
+        "run_count": len(runs),
+        "runs": [pipeline_run_to_dict(run) for run in runs],
+    }
+
+
+@router.get("/runs/{run_id}")
+def get_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    return pipeline_run_to_dict(run)
+
+
+@router.get("/runs/{run_id}/cases")
+def get_run_cases(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    cases = get_cases_for_run(db=db, run_id=run_id)
+
+    return {
+        "run_id": run_id,
+        "case_count": len(cases),
+        "cases": cases,
+    }

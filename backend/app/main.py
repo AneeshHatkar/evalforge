@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from backend.app.db.session import init_db
 
 from backend.app.config import settings
 from backend.app.routers import (
@@ -22,6 +23,9 @@ app = FastAPI(
         "benchmarks for RAG systems and AI-agent workflows."
     ),
 )
+@app.on_event("startup")
+def startup_event() -> None:
+    init_db()
 
 app.include_router(health.router)
 app.include_router(projects.router)

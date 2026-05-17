@@ -49,6 +49,7 @@ class EvalRunResponse(BaseModel):
 class PipelineRunResponse(BaseModel):
     project_id: str
     dataset_version: str
+    pipeline_run_id: Optional[str] = None
 
     document_count: int
     chunk_count: int

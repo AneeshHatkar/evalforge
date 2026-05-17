@@ -28,3 +28,7 @@ outputs/*.csv
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local SQLite database
+data/*.db
+data/*.sqlite
