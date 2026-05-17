@@ -1,17 +1,22 @@
-import tempfile
 import csv
 import io
 import json
-from fastapi.responses import Response
+import tempfile
 from pathlib import Path
-from typing import Annotated, List, Optional
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.orm import Session
+
 from backend.app.api_schemas import PipelineRunResponse
 from backend.app.db.repositories import (
+    compare_pipeline_runs,
     create_pipeline_run,
     get_cases_for_run,
+    get_eval_summary_for_run,
     get_pipeline_run,
+    get_quality_summary_for_run,
     list_pipeline_runs,
     pipeline_run_to_dict,
 )
@@ -33,10 +38,167 @@ from src.generators.tool_use import generate_tool_use_cases
 from src.rule_extractor import extract_rules_from_chunks
 from src.validator import attach_validation_errors, summarize_validation_results, validate_cases
 
+
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
-
 SUPPORTED_UPLOAD_EXTENSIONS = {".md", ".txt", ".json", ".csv", ".pdf"}
+
+@router.get("/ui", response_class=HTMLResponse)
+def pipeline_upload_ui() -> str:
+    """
+    Simple browser upload UI for the one-shot EvalForge pipeline.
+
+    Swagger UI can render multi-file uploads poorly in some environments,
+    so this page gives users a reliable upload form.
+    """
+
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>EvalForge Pipeline Upload</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                max-width: 920px;
+                margin: 40px auto;
+                padding: 0 24px;
+                color: #1f2937;
+                background: #f9fafb;
+            }
+            .card {
+                background: white;
+                border: 1px solid #e5e7eb;
+                border-radius: 16px;
+                padding: 28px;
+                box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+            }
+            h1 {
+                margin-top: 0;
+                font-size: 32px;
+            }
+            p {
+                line-height: 1.6;
+            }
+            label {
+                display: block;
+                margin-top: 18px;
+                font-weight: 650;
+            }
+            input, select {
+                width: 100%;
+                box-sizing: border-box;
+                margin-top: 8px;
+                padding: 10px 12px;
+                border: 1px solid #d1d5db;
+                border-radius: 10px;
+                font-size: 15px;
+            }
+            input[type="file"] {
+                background: #f3f4f6;
+            }
+            .row {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 18px;
+            }
+            button {
+                margin-top: 24px;
+                width: 100%;
+                border: 0;
+                border-radius: 12px;
+                padding: 14px 18px;
+                font-size: 16px;
+                font-weight: 700;
+                color: white;
+                background: #2563eb;
+                cursor: pointer;
+            }
+            button:hover {
+                background: #1d4ed8;
+            }
+            .hint {
+                color: #6b7280;
+                font-size: 14px;
+            }
+            code {
+                background: #f3f4f6;
+                padding: 2px 6px;
+                border-radius: 6px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>EvalForge Pipeline Upload</h1>
+            <p>
+                Upload RAG/source documents, policy files, CSVs, PDFs, and optional tool schema JSON files.
+                EvalForge will automatically ingest, chunk, extract rules, generate benchmark cases,
+                validate citations, persist the run, and optionally run evaluation.
+            </p>
+
+            <form action="/pipeline/run" method="post" enctype="multipart/form-data">
+                <label>Files</label>
+                <input
+                    type="file"
+                    name="files"
+                    multiple
+                    required
+                    accept=".md,.txt,.json,.csv,.pdf"
+                />
+                <p class="hint">
+                    Supported: <code>.md</code>, <code>.txt</code>, <code>.json</code>,
+                    <code>.csv</code>, <code>.pdf</code>. Select multiple files at once.
+                </p>
+
+                <div class="row">
+                    <div>
+                        <label>Project ID</label>
+                        <input type="text" name="project_id" value="support_demo_interface" />
+                    </div>
+                    <div>
+                        <label>Dataset Version</label>
+                        <input type="text" name="dataset_version" value="v0.1.0" />
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div>
+                        <label>Max Cases Per Type</label>
+                        <input type="number" name="max_cases_per_type" value="5" min="1" max="50" />
+                    </div>
+                    <div>
+                        <label>Citation Support Threshold</label>
+                        <input type="number" name="citation_support_threshold" value="0.35" min="0" max="1" step="0.05" />
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div>
+                        <label>Run Evaluation?</label>
+                        <select name="run_eval">
+                            <option value="true" selected>true</option>
+                            <option value="false">false</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Target System</label>
+                        <select name="target_system">
+                            <option value="demo_target_system" selected>demo_target_system</option>
+                            <option value="intentionally_bad_target_system">intentionally_bad_target_system</option>
+                        </select>
+                    </div>
+                </div>
+
+                <label>Pass Threshold</label>
+                <input type="number" name="pass_threshold" value="0.70" min="0" max="1" step="0.05" />
+
+                <button type="submit">Run EvalForge Pipeline</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
 
 
 async def save_uploads_to_temp_dir(files: List[UploadFile]) -> List[Path]:
@@ -105,7 +267,7 @@ def generate_cases_from_rules(
     tool_schema_text: str,
 ):
     """
-    Run all EvalForge Stage 2 generators.
+    Run all EvalForge generators over the currently extracted rules.
     """
 
     cases = []
@@ -151,19 +313,107 @@ def generate_cases_from_rules(
     return cases
 
 
+def get_cases_or_404(run_id: str, db: Session) -> list[dict]:
+    """
+    Get persisted cases for a run or raise 404.
+    """
+
+    run = get_pipeline_run(db=db, run_id=run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
+
+    return get_cases_for_run(db=db, run_id=run_id)
+
+
+def flatten_case_for_persisted_csv(case: dict) -> dict:
+    """
+    Flatten one persisted case dictionary into a CSV-friendly row.
+    """
+
+    return {
+        "test_id": case.get("test_id", ""),
+        "project_id": case.get("project_id", ""),
+        "dataset_version": case.get("dataset_version", ""),
+        "test_type": case.get("test_type", ""),
+        "risk_level": case.get("risk_level", ""),
+        "review_status": case.get("review_status", ""),
+        "user_query": case.get("user_query", ""),
+        "expected_behavior": case.get("expected_behavior", ""),
+        "expected_answer_outline": json.dumps(
+            case.get("expected_answer_outline", []),
+            ensure_ascii=False,
+        ),
+        "required_citations": json.dumps(
+            case.get("required_citations", []),
+            ensure_ascii=False,
+        ),
+        "disallowed_behaviors": json.dumps(
+            case.get("disallowed_behaviors", []),
+            ensure_ascii=False,
+        ),
+        "tags": json.dumps(case.get("tags", []), ensure_ascii=False),
+        "tool_expectation": json.dumps(
+            case.get("tool_expectation"),
+            ensure_ascii=False,
+        ),
+        "validation_errors": json.dumps(
+            case.get("validation_errors", []),
+            ensure_ascii=False,
+        ),
+        "metadata": json.dumps(case.get("metadata", {}), ensure_ascii=False),
+        "created_at": case.get("created_at", ""),
+    }
+
+
+def persisted_cases_to_csv_text(cases: list[dict]) -> str:
+    """
+    Convert persisted cases into CSV text.
+    """
+
+    output = io.StringIO()
+
+    fieldnames = [
+        "test_id",
+        "project_id",
+        "dataset_version",
+        "test_type",
+        "risk_level",
+        "review_status",
+        "user_query",
+        "expected_behavior",
+        "expected_answer_outline",
+        "required_citations",
+        "disallowed_behaviors",
+        "tags",
+        "tool_expectation",
+        "validation_errors",
+        "metadata",
+        "created_at",
+    ]
+
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+
+    for case in cases:
+        writer.writerow(flatten_case_for_persisted_csv(case))
+
+    return output.getvalue()
+
+
 @router.post("/run", response_model=PipelineRunResponse)
 async def run_pipeline(
-    files: Annotated[
-        List[UploadFile],
-        File(description="Upload one or more .md, .txt, .json, .csv, or .pdf files."),
-    ],
-    project_id: Annotated[str, Form()] = "support_demo",
-    dataset_version: Annotated[str, Form()] = "v0.1.0",
-    max_cases_per_type: Annotated[int, Form()] = 8,
-    citation_support_threshold: Annotated[float, Form()] = 0.35,
-    run_eval: Annotated[bool, Form()] = False,
-    target_system: Annotated[str, Form()] = "demo_target_system",
-    pass_threshold: Annotated[float, Form()] = 0.70,
+    files: List[UploadFile] = File(
+        ...,
+        description="Upload one or more .md, .txt, .json, .csv, or .pdf files.",
+    ),
+    project_id: str = Form("support_demo"),
+    dataset_version: str = Form("v0.1.0"),
+    max_cases_per_type: int = Form(8),
+    citation_support_threshold: float = Form(0.35),
+    run_eval: bool = Form(False),
+    target_system: str = Form("demo_target_system"),
+    pass_threshold: float = Form(0.70),
     db: Session = Depends(get_db),
 ) -> PipelineRunResponse:
     """
@@ -285,92 +535,6 @@ async def run_pipeline(
         ),
     )
 
-def get_cases_or_404(run_id: str, db: Session) -> list[dict]:
-    """
-    Get persisted cases for a run or raise 404.
-    """
-
-    run = get_pipeline_run(db=db, run_id=run_id)
-
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
-
-    return get_cases_for_run(db=db, run_id=run_id)
-
-
-def flatten_case_for_persisted_csv(case: dict) -> dict:
-    """
-    Flatten one persisted case dictionary into a CSV-friendly row.
-    """
-
-    return {
-        "test_id": case.get("test_id", ""),
-        "project_id": case.get("project_id", ""),
-        "dataset_version": case.get("dataset_version", ""),
-        "test_type": case.get("test_type", ""),
-        "risk_level": case.get("risk_level", ""),
-        "review_status": case.get("review_status", ""),
-        "user_query": case.get("user_query", ""),
-        "expected_behavior": case.get("expected_behavior", ""),
-        "expected_answer_outline": json.dumps(
-            case.get("expected_answer_outline", []),
-            ensure_ascii=False,
-        ),
-        "required_citations": json.dumps(
-            case.get("required_citations", []),
-            ensure_ascii=False,
-        ),
-        "disallowed_behaviors": json.dumps(
-            case.get("disallowed_behaviors", []),
-            ensure_ascii=False,
-        ),
-        "tags": json.dumps(case.get("tags", []), ensure_ascii=False),
-        "tool_expectation": json.dumps(
-            case.get("tool_expectation"),
-            ensure_ascii=False,
-        ),
-        "validation_errors": json.dumps(
-            case.get("validation_errors", []),
-            ensure_ascii=False,
-        ),
-        "metadata": json.dumps(case.get("metadata", {}), ensure_ascii=False),
-        "created_at": case.get("created_at", ""),
-    }
-
-
-def persisted_cases_to_csv_text(cases: list[dict]) -> str:
-    """
-    Convert persisted cases into CSV text.
-    """
-
-    output = io.StringIO()
-
-    fieldnames = [
-        "test_id",
-        "project_id",
-        "dataset_version",
-        "test_type",
-        "risk_level",
-        "review_status",
-        "user_query",
-        "expected_behavior",
-        "expected_answer_outline",
-        "required_citations",
-        "disallowed_behaviors",
-        "tags",
-        "tool_expectation",
-        "validation_errors",
-        "metadata",
-        "created_at",
-    ]
-
-    writer = csv.DictWriter(output, fieldnames=fieldnames)
-    writer.writeheader()
-
-    for case in cases:
-        writer.writerow(flatten_case_for_persisted_csv(case))
-
-    return output.getvalue()
 
 @router.get("/runs")
 def list_runs(
@@ -433,61 +597,6 @@ def get_run_cases(
         "cases": cases,
     }
 
-from backend.app.db.repositories import (
-    compare_pipeline_runs,
-    create_pipeline_run,
-    get_cases_for_run,
-    get_eval_summary_for_run,
-    get_pipeline_run,
-    get_quality_summary_for_run,
-    list_pipeline_runs,
-    pipeline_run_to_dict,
-)
-
-@router.get("/runs")
-def list_runs(
-    project_id: Optional[str] = None,
-    limit: int = 20,
-    db: Session = Depends(get_db),
-) -> dict:
-    runs = list_pipeline_runs(db=db, project_id=project_id, limit=limit)
-
-    return {
-        "run_count": len(runs),
-        "runs": [pipeline_run_to_dict(run) for run in runs],
-    }
-
-
-@router.get("/runs/{run_id}")
-def get_run(
-    run_id: str,
-    db: Session = Depends(get_db),
-) -> dict:
-    run = get_pipeline_run(db=db, run_id=run_id)
-
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
-
-    return pipeline_run_to_dict(run)
-
-
-@router.get("/runs/{run_id}/cases")
-def get_run_cases(
-    run_id: str,
-    db: Session = Depends(get_db),
-) -> dict:
-    run = get_pipeline_run(db=db, run_id=run_id)
-
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Pipeline run not found: {run_id}")
-
-    cases = get_cases_for_run(db=db, run_id=run_id)
-
-    return {
-        "run_id": run_id,
-        "case_count": len(cases),
-        "cases": cases,
-    }
 
 @router.get("/runs/{run_id}/compare/{baseline_run_id}")
 def compare_runs(
@@ -521,6 +630,7 @@ def compare_runs(
         baseline_run=baseline_run,
         regression_threshold=regression_threshold,
     )
+
 
 @router.get("/runs/{run_id}/export/json")
 def export_run_json(
@@ -560,10 +670,7 @@ def export_run_jsonl(
 
     cases = get_cases_for_run(db=db, run_id=run_id)
 
-    jsonl_text = "\n".join(
-        json.dumps(case, ensure_ascii=False)
-        for case in cases
-    )
+    jsonl_text = "\n".join(json.dumps(case, ensure_ascii=False) for case in cases)
 
     if jsonl_text:
         jsonl_text += "\n"
@@ -573,9 +680,7 @@ def export_run_jsonl(
     return Response(
         content=jsonl_text,
         media_type="application/x-ndjson",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -601,9 +706,7 @@ def export_run_csv(
     return Response(
         content=csv_text,
         media_type="text/csv",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
